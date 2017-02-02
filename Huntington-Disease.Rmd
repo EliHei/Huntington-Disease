@@ -1,0 +1,198 @@
+---
+title: "Huntington Disease"
+author: "Elyas Heidary-93100796"
+date: "January 28, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r Load Data and Packages}
+library(Biobase)
+library(GEOquery)
+library(limma)
+library(affy)
+library(reshape2)
+library(highcharter)
+library(ggplot2)
+setwd("data/")
+# load series and platform data from GEO
+gset_raw <- getGEO("GSE45516", GSEMatrix =TRUE, AnnotGPL=TRUE)[[1]]
+gset <- exprs(gset_raw)
+
+setwd("..")
+```
+
+
+```{r}
+melted_gset <- melt(gset)
+highchart() %>% hc_add_series_boxplot(melted_gset$value, by = melted_gset$Var2 , color = melted_gset$Var2)
+ggplot()+geom_boxplot(data = melted_gset,aes(x=Var2,y =value),fill = "grey80", colour = "#3366FF")
+
+n_gset <- normalizeQuantiles(gset)
+hcboxplot(x = diamonds$x, var = diamonds$color,
+          name = "Length", color = "#2980b9")
+melted_n_gset <- melt(n_gset)
+ggplot()+geom_boxplot(data = melted_n_gset,aes(x=Var2,y =value),fill = "grey80", colour = "#3366FF")
+
+gset.cor <- cor(n_gset)
+pheatmap::pheatmap(gset.cor)
+```
+
+```{r}
+#   Differential expression analysis with limma
+library(Biobase)
+library(GEOquery)
+library(limma)
+
+# load series and platform data from GEO
+
+gset <- getGEO("GSE45516", GSEMatrix =TRUE, AnnotGPL=TRUE)
+if (length(gset) > 1) idx <- grep("GPL570", attr(gset, "names")) else idx <- 1
+gset <- gset[[idx]]
+
+# make proper column names to match toptable 
+fvarLabels(gset) <- make.names(fvarLabels(gset))
+
+# group names for all samples
+gsms <- "111000000"
+sml <- c()
+for (i in 1:nchar(gsms)) { sml[i] <- substr(gsms,i,i) }
+
+# log2 transform
+ex <- exprs(gset)
+qx <- as.numeric(quantile(ex, c(0., 0.25, 0.5, 0.75, 0.99, 1.0), na.rm=T))
+LogC <- (qx[5] > 100) ||
+          (qx[6]-qx[1] > 50 && qx[2] > 0) ||
+          (qx[2] > 0 && qx[2] < 1 && qx[4] > 1 && qx[4] < 2)
+if (LogC) { ex[which(ex <= 0)] <- NaN
+  exprs(gset) <- log2(ex) }
+
+# set up the data and proceed with analysis
+sml <- paste("G", sml, sep="")    # set group names
+fl <- as.factor(sml)
+gset$description <- fl
+design <- model.matrix(~ description + 0, gset)
+colnames(design) <- levels(fl)
+fit <- lmFit(gset, design)
+cont.matrix <- makeContrasts(G1-G0, levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2, 0.01)
+tT <- topTable(fit2, adjust="fdr", sort.by="B", number=250)
+
+tT <- subset(tT, select=c("ID","adj.P.Val","P.Value","t","B","logFC","Gene.symbol","Gene.title"))
+write.table(tT, file="myTable.txt", row.names=F, sep="\t")
+my.table<- read.table("myTable.txt")
+```
+
+```{r}
+library(Biobase)
+library(GEOquery)
+library(limma)
+library(pheatmap)
+library(ggplot2)
+library(reshape2)
+library(data.table)
+library(dplyr)
+
+# load series and platform data from GEO
+
+gset <- getGEO("GSE", destdir = "data/", GSEMatrix =TRUE, getGPL=FALSE)
+gset_raw <- getGEO("GSE45516", GSEMatrix =TRUE, AnnotGPL=TRUE)[[1]]
+write.table(gset_raw , "data/gset_raw.txt")
+gset <- exprs(gset_raw)
+
+# 
+# # set parameters and draw the plot
+# gset <- read.fread("data/GSE73968_series_matrix.txt", comment.char = "!")
+# rownames(gset) <- gset[,1]
+# gset <- gset[,-1]
+# boxplot(gset)
+
+gr <- c(rep("Control",3), rep("Case", 6))
+samples <- c(paste("Control",1:3), paste("Case",1:6))
+colnames(gset) <- samples
+
+gset.cor <- cor(gset, method="spearman")
+pheatmap(gset.cor)
+
+# v <- apply(gset, 1, var)
+# gset.v <- gset[order(-v),]
+# gset.cor <- cor(head(gset.v, 100), method="spearman")
+# pheatmap(gset.cor)
+
+pc <- prcomp(gset)
+pcr <- data.frame(pc$rotation[,1:3], Samples=samples, Group=gr)
+
+ggplot(pcr , aes(PC1 , PC2 , group = Group , fill = Group)) + geom_point() + theme_bw()
+
+gset.m <- melt(gset)
+
+ggplot(gset.m , aes(variable , value , group = variable)) + geom_boxplot()
+
+
+
+pdf("result/case_control.pdf")
+ggplot(gset.m , aes(variable , value , group = variable)) + geom_boxplot()
+dev.off()
+
+
+gr <- factor(gr)
+
+grdf <- data.frame(Group = gr)
+
+design <- model.matrix(~Group + 0 , grdf)
+
+fit = lmFit(gset_raw , design)
+cont = makeContrasts(GroupCase - GroupControl , levels = design)
+
+fit = contrasts.fit(fit , cont)
+
+fit <- eBayes(fit)
+tt <- topTable(fit , number = Inf)
+tt %>% select( Gene.symbol , logFC , adj.P.Val , t) -> DEG
+
+plotly(fit)
+# tt$ID = rownames(tt)
+
+# HD.table<- read.table("kidney tissues.txt" , header = T)
+# HD.frame <- data.frame(tt)
+# tt$logFC = as.numeric(tt$logFC)
+# kidney.frame$adj.P.Val = as.numeric(kidney.frame$adj.P.Val)
+DEG %>% filter(adj.P.Val < 0.005 & logFC > 1 ) -> HD.controls
+DEG %>% filter(adj.P.Val < 0.01 & logFC < -1 ) -> HD.cases
+write.csv(HD.controls, file = "controls.csv")
+write.csv(HD.cases, file = "cases.csv")
+write(as.character(HD.controls$Gene.symbol) , file = "HD_DR.txt")
+write(as.character(HD.cases$Gene.symbol) , file = "HD_UR.txt")
+
+p <- plot_ly(data = tt, x = logFC, y = -log10(P.Value)) %>% 
+  layout(title ="Volcano Plot") 
+
+tt$threshold = as.factor(abs(tt$logFC) > 2 & tt$adj.P.Val < 0.05)
+ggplot(data=tt, aes(x=logFC, y=-log10(P.Value), colour=threshold)) +
+  geom_point(alpha=0.4, size=1.75) +
+  xlim(c(-10, 10)) + ylim(c(0, 15)) +
+  xlab("log2 fold change") + ylab("-log10 p-value") + geom_text(aes(x=tt$logFC, y=-log10(tt$P.Value),
+                     label=tt$Gene.ID, size=1.2), colour="black")
+g
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

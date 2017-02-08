@@ -102,12 +102,14 @@ library(ggplot2)
 library(reshape2)
 library(data.table)
 library(dplyr)
+library(highcharter)
+biocLite("org.Sc.sgd.db")
 
 # load series and platform data from GEO
 
-gset <- getGEO("GSE", destdir = "data/", GSEMatrix =TRUE, getGPL=FALSE)
+# gset <- getGEO("GSE", destdir = "data/", GSEMatrix =TRUE, getGPL=FALSE)
 gset_raw <- getGEO("GSE45516", GSEMatrix =TRUE, AnnotGPL=TRUE)[[1]]
-write.table(gset_raw , "data/gset_raw.txt")
+# write.table(gset_raw , "data/gset_raw.txt")
 gset <- exprs(gset_raw)
 
 # 
@@ -129,20 +131,14 @@ pheatmap(gset.cor)
 # gset.cor <- cor(head(gset.v, 100), method="spearman")
 # pheatmap(gset.cor)
 
-pc <- prcomp(gset)
-pcr <- data.frame(pc$rotation[,1:3], Samples=samples, Group=gr)
-
-ggplot(pcr , aes(PC1 , PC2 , group = Group , fill = Group)) + geom_point() + theme_bw()
-
-gset.m <- melt(gset)
-
-ggplot(gset.m , aes(variable , value , group = variable)) + geom_boxplot()
-
-
-
-pdf("result/case_control.pdf")
-ggplot(gset.m , aes(variable , value , group = variable)) + geom_boxplot()
-dev.off()
+# pc <- prcomp(gset)
+# pcr <- data.frame(pc$rotation[,1:3], Samples=samples, Group=gr)
+# 
+# ggplot(pcr , aes(PC1 , PC2 , group = Group , fill = Group)) + geom_point() + theme_bw()
+# 
+# gset.m <- melt(gset)
+# 
+# ggplot(gset.m , aes(variable , value , group = variable)) + geom_boxplot()
 
 
 gr <- factor(gr)
@@ -158,17 +154,17 @@ fit = contrasts.fit(fit , cont)
 
 fit <- eBayes(fit)
 tt <- topTable(fit , number = Inf)
-tt %>% select( Gene.symbol , logFC , adj.P.Val , t) -> DEG
+tt %>% select(ID ,Gene.symbol , logFC , P.Value, adj.P.Val , t) -> DEG
 
-plotly(fit)
+# plotly(fit)
 # tt$ID = rownames(tt)
 
 # HD.table<- read.table("kidney tissues.txt" , header = T)
 # HD.frame <- data.frame(tt)
 # tt$logFC = as.numeric(tt$logFC)
 # kidney.frame$adj.P.Val = as.numeric(kidney.frame$adj.P.Val)
-DEG %>% filter(adj.P.Val < 0.005 & logFC > 1 ) -> HD.controls
-DEG %>% filter(adj.P.Val < 0.01 & logFC < -1 ) -> HD.cases
+DEG %>% filter(adj.P.Val < 0.005 & logFC > 2 ) -> HD.cases
+DEG %>% filter(adj.P.Val < 0.01 & logFC < -2 ) -> HD.controls
 write.csv(HD.controls, file = "controls.csv")
 write.csv(HD.cases, file = "cases.csv")
 write(as.character(HD.controls$Gene.symbol) , file = "HD_DR.txt")
@@ -177,22 +173,245 @@ write(as.character(HD.cases$Gene.symbol) , file = "HD_UR.txt")
 p <- plot_ly(data = tt, x = logFC, y = -log10(P.Value)) %>% 
   layout(title ="Volcano Plot") 
 
-tt$threshold = as.factor(abs(tt$logFC) > 2 & tt$adj.P.Val < 0.05)
-ggplot(data=tt, aes(x=logFC, y=-log10(P.Value), colour=threshold)) +
+tt$threshold = as.factor(abs(tt$logFC) > 2 & tt$adj.P.Val < 0.01)
+
+tt$State = ifelse(tt$logFC > 2 & tt$adj.P.Val < 0.01 , "UP_Regulated" , ifelse(tt$logFC < -1 & tt$adj.P.Val < 0.01 , "Down_Regulated" , "No_Significant_Changes"))
+
+#hchart(tt, "pie", x = State) %>% hc_add_theme(hc_theme_google())
+
+tt %>% filter(State == "UP_Regulated" | State == "Down_Regulated") -> DEGs
+
+# tt1 <- (tt %>% arrange(P.Value))[1:1000,]
+g <- ggplot(data=tt, aes(x=logFC, y=-log10(P.Value), colour=State)) +
   geom_point(alpha=0.4, size=1.75) +
-  xlim(c(-10, 10)) + ylim(c(0, 15)) +
-  xlab("log2 fold change") + ylab("-log10 p-value") + geom_text(aes(x=tt$logFC, y=-log10(tt$P.Value),
-                     label=tt$Gene.ID, size=1.2), colour="black")
-g
+  xlim(c(-5, 5)) + ylim(c(0, 8)) +
+  xlab("log2 fold change") + ylab("-log10 p-value") 
+
+pheatmap(gset[DEGs$ID,])
+
+g +  geom_text(data = subset(tt, (logFC > 3 & adj.P.Val < 0.01)  | State == "Down_Regulated"),aes(x=logFC, y=-log10(P.Value), label=Gene.symbol, size=0.2), colour="black")
+
 
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
+```{r}
+library(pcaMethods)
+library(DiffCorr)
+DEG <- gset[DEGs$ID,]
+data(golub, package = "multtest")
+hc.mol1 <- cluster.molecule(DEG[, 1:3], "pearson", "average")
+hc.mol2 <- cluster.molecule(DEG[, 4:9], "pearson", "average")
+g1 <- cutree(hc.mol1, h=0.4)
+g2 <- cutree(hc.mol2, h=0.4)
+##
+plotDiffCorrGroup(data =DEG, g1, g2,  1:3, 4:9,
+scale.center=TRUE, scale.scale=TRUE,
+ylim=c(-5,5))
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+res1 <- get.eigen.molecule(DEG, g1)
+g1.eigen <- get.eigen.molecule.graph(res1)
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+```{r}
+source("https://bioconductor.org/biocLite.R")
+biocLite("GOstats")
+biocLite("graphNEL")
+biocLite("Rgraphviz")
+library(graphNEL)
+library(GOstats)
+biocLite("GSEABase")
+biocLite("topGO")
+library(topGO)
+biocLite("FGNet")
+library(FGNet)
+library(RCurl)
+biocLite("Category")
+biocLite("org.Hs.eg.db")
+
+plot(compCorrGraph(gset_raw[1:10,], k = 1, tau = 0.6))
+
+net <- gset_raw[rownames(DEG),]
+write.table(file = "net.txt", net)
+plot(compCorrGraph(net[1:50,], k = 10, tau = 0.6))
+
+sampleGOdata <- new("topGOdata",
+description = "Simple session", ontology = "BP",
+allGenes = gset, geneSel = topDiffGenes,
+nodeSize = 10,
+annot = annFUN.db, affyLib = affyLib)
+
+```
+
+
+```{r}
+library(RDAVIDWebService)
+library(dplyr)
+feaResults_David <- format_david("https://david.ncifcrf.gov/data/download/t2t_FDAAC3ECD3E91486126834603.txt")
+
+
+egs <- GeneSet(net[201:250, ], setName = "Sample")
+feaResults_topGO <- fea_topGO(symbols, geneIdType="GENENAME", organism="BP") 
+
+
+
+
+
+library(org.Hs.eg.db)
+
+### First two genes are ok...
+symbols <- DEGs$Gene.symbol
+ganename <- c()
+entrezid <- c()
+i = 1
+for(sym in symbols){
+    
+    entrezid[i] <-
+as.character(mget(sym,org.Hs.egSYMBOL2EG,ifnotfound=NA))
+    
+
+    genename[i] <-
+as.character(mget(entrezid[i],org.Hs.egGENENAME,ifnotfound=NA))
+    print(genename)
+    i=i+1
+
+}
+DEGs %>% mutate(Gene.symbol = strsplit(as.character(Gene.symbol) , "/.")) -> DEGs
+for(i in dim(DEGs)[1]){
+  sym <- DEGs$Gene.symbol[i]
+  DEGs$Gene.symbol[i] = sym[[1]]
+  
+}
+
+symbols <-strsplit2(DEGs$Gene.symbol , "/.")[,1]
+jobID <- fea_gtLinker(geneList=symbols, organism="Sc")
+feaResults_gtLinker <- fea_gtLinker_getResults(jobID=jobID, organism="Sc")
+
+
+IDs <- as.numeric(strsplit2(DEGs$Gene.ID , "/.")[,1])
+
+
+```
+
+
+
+```{r}
+# biocLite("hgu95av2.db")
+library(hgu95av2.db)
+library(topGO)
+library(DT)
+data(geneList)
+
+
+
+geneList_HD =HD.cases$adj.P.Val
+names( geneList_HD ) = HD.cases$ID
+
+geneList_N = HD.controls$adj.P.Val
+names( geneList_N ) = as.character(HD.controls$ID)
+
+sampleGOdata_HD <- new("topGOdata", 
+                    description = "Simple session", ontology = "BP",
+                    allGenes = geneList_HD, geneSel = topDiffGenes,
+                    nodeSize = 10,
+                    annot = annFUN.db, affyLib = affyLib)
+
+sampleGOdata_N <- new("topGOdata", 
+                    description = "Simple session", ontology = "BP",
+                    allGenes = geneList_N, geneSel = topDiffGenes,
+                    nodeSize = 10,
+                    annot = annFUN.db, affyLib = affyLib)
+
+resultFisher <- runTest(sampleGOdata, algorithm = "classic", statistic = "fisher")
+resultKS <- runTest(sampleGOdata, algorithm = "classic", statistic = "ks")
+allRes <- GenTable(sampleGOdata, classicFisher = resultFisher, 
+                   classicKS = resultKS, elimKS = resultKS,
+                   orderBy = "elimKS", ranksOf = "classicFisher", topNodes = 10)
+
+goID <- allRes[1, "GO.ID"]
+print(showGroupDensity(sampleGOdata, goID, ranks = TRUE))
+
+
+showSigOfNodes(sampleGOdata, score(resultWeight), firstSigNodes = 5, useInfo = 'def')
+
+if(require(xtable))
+  print(xtable(apply(allRes, 2, as.character)), floating = FALSE)
+
+
+
+colMap <- function(x) {
+  .col <- rep(rev(heat.colors(length(unique(x)))), time = table(x))
+  return(.col[match(1:length(x), order(x))])
+}
+pValue.classic <- score(resultKS)
+pValue.elim <- score(resultKS.elim)[names(pValue.classic)]
+
+gstat <- termStat(sampleGOdata, names(pValue.classic))
+gSize <- gstat$Annotated / max(gstat$Annotated) * 4
+gCol <- colMap(gstat$Significant)
+
+par(mfcol = c(1, 2), cex = 1)
+plot(pValue.classic, pValue.elim, xlab = "p-value classic", ylab = "p-value elim",
+     pch = 19, cex = gSize, col = gCol)
+
+plot(pValue.classic, pValue.elim, log = "xy", xlab = "log(p-value) classic", ylab = "log(p-value) elim",
+     pch = 19, cex = gSize, col = gCol)
+
+
+
+sel.go <- names(pValue.classic)[pValue.elim < pValue.classic]
+
+cbind(termStat(sampleGOdata, sel.go),
+      elim = pValue.elim[sel.go],
+      classic = pValue.classic[sel.go])
+
+graph(sampleGOdata, resultKS, firstSigNodes = 5, fn.prefix = "tGO", useInfo = "all", pdfSW = TRUE)
+
+resultKS.elim <- runTest(sampleGOdata, algorithm = "elim", statistic = "ks")
+
+pdf("aqariza.pdf")
+showSigOfNodes(sampleGOdata, score(resultKS.elim), firstSigNodes = 5, useInfo = 'all')
+dev.off()
+
+goID <- allRes[1, "GO.ID"]
+print(showGroupDensity(sampleGOdata, goID, ranks = TRUE))
+
+goID <- allRes[10, "GO.ID"]
+gt <- printGenes(sampleGOdata, whichTerms = goID, chip = affyLib, numChar = 40)
+data.table(gt)
+
+```
+
+
+
+```{r}
+library(GSEABase)
+
+edgs <- GeneSet(net, setName="Sample")
+head(geneIds(edgs))
+mapIdentifiers(edgs, EntrezIdentifier())
+names(slot(getClass("GeneIdentifierType"), "subclasses"))
+
+```
+
+
+```{r}
+source("https://bioconductor.org/biocLite.R")
+biocLite("GOexpress")
+library(GOexpress)
+eset<-exprs(AlvMac)
+AlvMac$treatment <- tt$State
+heatmap_GO(
+    go_id = "GO:0034142", result = BP.5, eSet=gset_raw, cexRow=0.4,
+    cexCol=1, cex.main=1, main.Lsplit=30)
+```
+
+
+```{r}
+source("https://bioconductor.org/biocLite.R")
+biocLite("GO.db")
+```
+
